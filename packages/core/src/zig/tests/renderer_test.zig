@@ -7,6 +7,7 @@ const gp = @import("../grapheme.zig");
 const ss = @import("../syntax-style.zig");
 const link = @import("../link.zig");
 const ansi = @import("../ansi.zig");
+const native_span_feed = @import("../native-span-feed.zig");
 
 const CliRenderer = renderer.CliRenderer;
 const TextBuffer = text_buffer.TextBuffer;
@@ -19,7 +20,7 @@ fn createWithOptionsOnce(allocator: std.mem.Allocator, width: u32, height: u32) 
     defer gp.deinitGlobalPool();
     defer link.deinitGlobalLinkPool();
 
-    var cli_renderer = try CliRenderer.createWithOptions(allocator, width, height, pool, true, false);
+    var cli_renderer = try CliRenderer.create(allocator, width, height, pool, .{ .testing = true });
     cli_renderer.destroy();
 }
 
@@ -50,7 +51,7 @@ test "renderer - create and destroy" {
         80,
         24,
         pool,
-        true,
+        .{ .testing = true },
     );
     defer cli_renderer.destroy();
 
@@ -76,7 +77,7 @@ test "renderer - simple text rendering to currentRenderBuffer" {
         80,
         24,
         pool,
-        true,
+        .{ .testing = true },
     );
     defer cli_renderer.destroy();
 
@@ -117,7 +118,7 @@ test "renderer - multi-line text rendering" {
         80,
         24,
         pool,
-        true,
+        .{ .testing = true },
     );
     defer cli_renderer.destroy();
 
@@ -157,7 +158,7 @@ test "renderer - emoji (wide grapheme) rendering" {
         80,
         24,
         pool,
-        true,
+        .{ .testing = true },
     );
     defer cli_renderer.destroy();
 
@@ -213,7 +214,7 @@ test "renderer - CJK characters rendering" {
         80,
         24,
         pool,
-        true,
+        .{ .testing = true },
     );
     defer cli_renderer.destroy();
 
@@ -265,7 +266,7 @@ test "renderer - mixed ASCII, emoji, and CJK" {
         80,
         24,
         pool,
-        true,
+        .{ .testing = true },
     );
     defer cli_renderer.destroy();
 
@@ -313,7 +314,7 @@ test "renderer - resize updates dimensions" {
         80,
         24,
         pool,
-        true,
+        .{ .testing = true },
     );
     defer cli_renderer.destroy();
 
@@ -335,7 +336,7 @@ test "renderer - background color setting" {
         80,
         24,
         pool,
-        true,
+        .{ .testing = true },
     );
     defer cli_renderer.destroy();
 
@@ -362,7 +363,7 @@ test "renderer - empty text buffer renders correctly" {
         80,
         24,
         pool,
-        true,
+        .{ .testing = true },
     );
     defer cli_renderer.destroy();
 
@@ -386,7 +387,7 @@ test "renderer - multiple renders update currentRenderBuffer" {
         80,
         24,
         pool,
-        true,
+        .{ .testing = true },
     );
     defer cli_renderer.destroy();
 
@@ -430,7 +431,7 @@ test "renderer - 1000 frame render loop with setStyledText" {
         80,
         24,
         pool,
-        true,
+        .{ .testing = true },
     );
     defer cli_renderer.destroy();
 
@@ -514,7 +515,7 @@ test "renderer - grapheme pool refcounting with frame buffer fast path" {
         80,
         24,
         limited_pool,
-        true,
+        .{ .testing = true },
     );
     defer cli_renderer.destroy();
 
@@ -580,7 +581,7 @@ test "renderer - unchanged grapheme should not churn IDs across frames" {
         4,
         1,
         pool,
-        true,
+        .{ .testing = true },
     );
     defer cli_renderer.destroy();
 
@@ -630,7 +631,7 @@ test "renderer - hyperlinks enabled with OSC 8 output" {
         80,
         24,
         pool,
-        true,
+        .{ .testing = true },
     );
     defer cli_renderer.destroy();
 
@@ -677,7 +678,7 @@ test "renderer - hyperlinks disabled no OSC 8 output" {
         80,
         24,
         pool,
-        true,
+        .{ .testing = true },
     );
     defer cli_renderer.destroy();
 
@@ -714,7 +715,7 @@ test "renderer - link transition mid-line" {
         80,
         24,
         pool,
-        true,
+        .{ .testing = true },
     );
     defer cli_renderer.destroy();
 
@@ -780,7 +781,7 @@ test "renderer - explicit_cursor_positioning emits cursor move after wide graphe
         80,
         24,
         pool,
-        true,
+        .{ .testing = true },
     );
     defer cli_renderer.destroy();
 
@@ -813,7 +814,7 @@ test "renderer - explicit_cursor_positioning produces more cursor moves" {
         80,
         24,
         pool,
-        true,
+        .{ .testing = true },
     );
     defer cli_renderer1.destroy();
 
@@ -830,7 +831,7 @@ test "renderer - explicit_cursor_positioning produces more cursor moves" {
         80,
         24,
         pool,
-        true,
+        .{ .testing = true },
     );
     defer cli_renderer2.destroy();
 
@@ -887,7 +888,7 @@ test "renderer - explicit_cursor_positioning with CJK characters" {
         80,
         24,
         pool,
-        true,
+        .{ .testing = true },
     );
     defer cli_renderer.destroy();
 
@@ -902,4 +903,228 @@ test "renderer - explicit_cursor_positioning with CJK characters" {
     const output = cli_renderer.getLastOutputForTest();
 
     try std.testing.expect(std.mem.indexOf(u8, output, "\x1b[1;3H") != null);
+}
+
+fn createAttachedFeed(allocator: std.mem.Allocator, options: ?native_span_feed.Options) !*native_span_feed.Stream {
+    const opts = if (options) |custom| custom else native_span_feed.defaultOptions();
+    const feed = try native_span_feed.Stream.create(allocator, opts);
+    try feed.attach();
+    return feed;
+}
+
+fn drainFeedBytes(allocator: std.mem.Allocator, feed: *native_span_feed.Stream) ![]u8 {
+    var spans: [256]native_span_feed.SpanInfo = undefined;
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    errdefer out.deinit(allocator);
+
+    while (true) {
+        const count = feed.drainSpans(spans[0..]);
+        if (count == 0) break;
+
+        var i: u32 = 0;
+        while (i < count) : (i += 1) {
+            const span = spans[i];
+            try out.appendSlice(allocator, span.slice());
+            feed.markSpanConsumed(span);
+        }
+    }
+
+    return out.toOwnedSlice(allocator);
+}
+
+// ============================================================================
+// STREAM MODE TESTS
+// ============================================================================
+
+test "renderer - instance buffers allocated by strategy" {
+    const pool = gp.initGlobalPool(std.testing.allocator);
+    defer gp.deinitGlobalPool();
+
+    var renderer_stdout = try CliRenderer.create(
+        std.testing.allocator,
+        80,
+        24,
+        pool,
+        .{ .testing = true },
+    );
+    defer renderer_stdout.destroy();
+
+    try std.testing.expect(renderer_stdout.instanceOutputA.len == renderer.OUTPUT_BUFFER_SIZE);
+    try std.testing.expect(renderer_stdout.instanceOutputB.len == renderer.OUTPUT_BUFFER_SIZE);
+
+    const feed = try createAttachedFeed(std.testing.allocator, null);
+    defer feed.destroy();
+
+    var renderer_stream = try CliRenderer.create(
+        std.testing.allocator,
+        80,
+        24,
+        pool,
+        .{ .testing = true, .output_strategy = 1, .feed_ptr = feed },
+    );
+    defer renderer_stream.destroy();
+
+    try std.testing.expectEqual(@as(usize, 0), renderer_stream.instanceOutputA.len);
+    try std.testing.expectEqual(@as(usize, 0), renderer_stream.instanceOutputB.len);
+}
+
+test "renderer - span_feed mode writes rendered frame to feed" {
+    const pool = gp.initGlobalPool(std.testing.allocator);
+    defer gp.deinitGlobalPool();
+
+    var tb = try TextBuffer.init(std.testing.allocator, pool, .unicode);
+    defer tb.deinit();
+    try tb.setText("Span feed output");
+
+    var view = try TextBufferView.init(std.testing.allocator, tb);
+    defer view.deinit();
+
+    const feed = try createAttachedFeed(std.testing.allocator, null);
+    defer feed.destroy();
+
+    var cli_renderer = try CliRenderer.create(
+        std.testing.allocator,
+        80,
+        24,
+        pool,
+        .{ .testing = false, .output_strategy = 1, .feed_ptr = feed },
+    );
+    defer cli_renderer.destroy();
+
+    const next_buffer = cli_renderer.getNextBuffer();
+    try next_buffer.drawTextBuffer(view, 0, 0);
+
+    cli_renderer.render(false);
+
+    const bytes = try drainFeedBytes(std.testing.allocator, feed);
+    defer std.testing.allocator.free(bytes);
+
+    try std.testing.expect(std.mem.indexOf(u8, bytes, "Span feed output") != null);
+}
+
+test "renderer - span_feed backpressure skips render when queue is full" {
+    const pool = gp.initGlobalPool(std.testing.allocator);
+    defer gp.deinitGlobalPool();
+
+    var feed_options = native_span_feed.defaultOptions();
+    feed_options.span_queue_capacity = 1;
+    const feed = try createAttachedFeed(std.testing.allocator, feed_options);
+    defer feed.destroy();
+
+    var cli_renderer = try CliRenderer.create(
+        std.testing.allocator,
+        80,
+        24,
+        pool,
+        .{ .testing = false, .output_strategy = 1, .feed_ptr = feed },
+    );
+    defer cli_renderer.destroy();
+
+    try feed.write("prefill");
+    try feed.commit();
+
+    const frame_before_skip = cli_renderer.renderStats.frameCount;
+    cli_renderer.render(false);
+    try std.testing.expectEqual(frame_before_skip, cli_renderer.renderStats.frameCount);
+
+    var spans: [4]native_span_feed.SpanInfo = undefined;
+    const drained = feed.drainSpans(spans[0..]);
+    try std.testing.expect(drained > 0);
+
+    var i: u32 = 0;
+    while (i < drained) : (i += 1) {
+        feed.markSpanConsumed(spans[i]);
+    }
+
+    cli_renderer.render(false);
+    try std.testing.expectEqual(frame_before_skip + 1, cli_renderer.renderStats.frameCount);
+}
+
+test "renderer - span_feed strategy prevents threading" {
+    const pool = gp.initGlobalPool(std.testing.allocator);
+    defer gp.deinitGlobalPool();
+
+    const feed = try createAttachedFeed(std.testing.allocator, null);
+    defer feed.destroy();
+
+    var cli_renderer = try CliRenderer.create(
+        std.testing.allocator,
+        80,
+        24,
+        pool,
+        .{ .testing = true, .output_strategy = 1, .feed_ptr = feed },
+    );
+    defer cli_renderer.destroy();
+
+    try std.testing.expect(!cli_renderer.useThread);
+
+    cli_renderer.setUseThread(true);
+    try std.testing.expect(!cli_renderer.useThread);
+}
+
+test "renderer - multiple span_feed renderers use independent feeds" {
+    const pool = gp.initGlobalPool(std.testing.allocator);
+    defer gp.deinitGlobalPool();
+
+    var tb1 = try TextBuffer.init(std.testing.allocator, pool, .unicode);
+    defer tb1.deinit();
+    try tb1.setText("Renderer 1");
+
+    var view1 = try TextBufferView.init(std.testing.allocator, tb1);
+    defer view1.deinit();
+
+    var tb2 = try TextBuffer.init(std.testing.allocator, pool, .unicode);
+    defer tb2.deinit();
+    try tb2.setText("Renderer 2");
+
+    var view2 = try TextBufferView.init(std.testing.allocator, tb2);
+    defer view2.deinit();
+
+    const feed1 = try createAttachedFeed(std.testing.allocator, null);
+    defer feed1.destroy();
+
+    var renderer1 = try CliRenderer.create(
+        std.testing.allocator,
+        80,
+        24,
+        pool,
+        .{ .testing = false, .output_strategy = 1, .feed_ptr = feed1 },
+    );
+    defer renderer1.destroy();
+
+    const feed2 = try createAttachedFeed(std.testing.allocator, null);
+    defer feed2.destroy();
+
+    var renderer2 = try CliRenderer.create(
+        std.testing.allocator,
+        80,
+        24,
+        pool,
+        .{ .testing = false, .output_strategy = 1, .feed_ptr = feed2 },
+    );
+    defer renderer2.destroy();
+
+    // Draw different content to each
+    const buf1 = renderer1.getNextBuffer();
+    try buf1.drawTextBuffer(view1, 0, 0);
+
+    const buf2 = renderer2.getNextBuffer();
+    try buf2.drawTextBuffer(view2, 0, 0);
+
+    // Render both
+    renderer1.render(false);
+    renderer2.render(false);
+
+    // Verify both rendered (frame count incremented)
+    try std.testing.expectEqual(@as(u64, 1), renderer1.renderStats.frameCount);
+    try std.testing.expectEqual(@as(u64, 1), renderer2.renderStats.frameCount);
+
+    const bytes1 = try drainFeedBytes(std.testing.allocator, feed1);
+    defer std.testing.allocator.free(bytes1);
+
+    const bytes2 = try drainFeedBytes(std.testing.allocator, feed2);
+    defer std.testing.allocator.free(bytes2);
+
+    try std.testing.expect(std.mem.indexOf(u8, bytes1, "Renderer 1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, bytes2, "Renderer 2") != null);
 }
