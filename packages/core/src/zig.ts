@@ -27,6 +27,7 @@ import {
   MeasureResultStruct,
   CursorStateStruct,
   CursorStyleOptionsStruct,
+  GridDrawOptionsStruct,
   NativeSpanFeedOptionsStruct,
   NativeSpanFeedStatsStruct,
   ReserveInfoStruct,
@@ -74,10 +75,10 @@ registerEnvVar({
   default: false,
 })
 registerEnvVar({
-  name: "OPENTUI_NO_GRAPHICS",
-  description: "Disable Kitty graphics protocol detection",
+  name: "OPENTUI_GRAPHICS",
+  description: "Enable Kitty graphics protocol detection",
   type: "boolean",
-  default: false,
+  default: true,
 })
 registerEnvVar({
   name: "OPENTUI_FORCE_NOZWJ",
@@ -128,6 +129,10 @@ function getOpenTUILib(libPath?: string) {
     createRenderer: {
       args: ["u32", "u32", "bool", "bool"],
       returns: "ptr",
+    },
+    setTerminalEnvVar: {
+      args: ["ptr", "ptr", "usize", "ptr", "usize"],
+      returns: "bool",
     },
     destroyRenderer: {
       args: ["ptr"],
@@ -335,6 +340,10 @@ function getOpenTUILib(libPath?: string) {
     },
     bufferDrawGrayscaleBufferSupersampled: {
       args: ["ptr", "i32", "i32", "ptr", "u32", "u32", "ptr", "ptr"],
+      returns: "void",
+    },
+    bufferDrawGrid: {
+      args: ["ptr", "ptr", "ptr", "ptr", "ptr", "u32", "ptr", "u32", "ptr"],
       returns: "void",
     },
     bufferDrawBox: {
@@ -1358,6 +1367,7 @@ export type NativeSpanFeedEventHandler = (eventId: number, arg0: Pointer, arg1: 
 
 export interface RenderLib {
   createRenderer: (width: number, height: number, options?: { testing?: boolean; remote?: boolean }) => Pointer | null
+  setTerminalEnvVar: (renderer: Pointer, key: string, value: string) => boolean
   destroyRenderer: (renderer: Pointer) => void
   setUseThread: (renderer: Pointer, useThread: boolean) => void
   setBackgroundColor: (renderer: Pointer, color: RGBA) => void
@@ -1462,6 +1472,17 @@ export interface RenderLib {
     srcHeight: number,
     fg: RGBA | null,
     bg: RGBA | null,
+  ) => void
+  bufferDrawGrid: (
+    buffer: Pointer,
+    borderChars: Uint32Array,
+    borderFg: RGBA,
+    borderBg: RGBA,
+    columnOffsets: Int32Array,
+    columnCount: number,
+    rowOffsets: Int32Array,
+    rowCount: number,
+    options: { drawInner: boolean; drawOuter: boolean },
   ) => void
   bufferDrawBox: (
     buffer: Pointer,
@@ -1960,6 +1981,12 @@ class FFIRenderLib implements RenderLib {
     return this.opentui.symbols.createRenderer(width, height, testing, remote)
   }
 
+  public setTerminalEnvVar(renderer: Pointer, key: string, value: string): boolean {
+    const keyBytes = this.encoder.encode(key)
+    const valueBytes = this.encoder.encode(value)
+    return this.opentui.symbols.setTerminalEnvVar(renderer, keyBytes, keyBytes.length, valueBytes, valueBytes.length)
+  }
+
   public destroyRenderer(renderer: Pointer): void {
     this.opentui.symbols.destroyRenderer(renderer)
   }
@@ -2218,6 +2245,35 @@ class FFIRenderLib implements RenderLib {
       srcHeight,
       fg?.buffer ?? null,
       bg?.buffer ?? null,
+    )
+  }
+
+  public bufferDrawGrid(
+    buffer: Pointer,
+    borderChars: Uint32Array,
+    borderFg: RGBA,
+    borderBg: RGBA,
+    columnOffsets: Int32Array,
+    columnCount: number,
+    rowOffsets: Int32Array,
+    rowCount: number,
+    options: { drawInner: boolean; drawOuter: boolean },
+  ): void {
+    const optionsBuffer = GridDrawOptionsStruct.pack({
+      drawInner: options.drawInner,
+      drawOuter: options.drawOuter,
+    })
+
+    this.opentui.symbols.bufferDrawGrid(
+      buffer,
+      borderChars,
+      borderFg.buffer,
+      borderBg.buffer,
+      columnOffsets,
+      columnCount,
+      rowOffsets,
+      rowCount,
+      ptr(optionsBuffer),
     )
   }
 
