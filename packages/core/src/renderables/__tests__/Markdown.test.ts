@@ -1,12 +1,14 @@
 import { test, expect, beforeEach, afterEach } from "bun:test"
 import { MarkdownRenderable } from "../Markdown"
 import { TextRenderable } from "../Text"
+import { TextTableRenderable } from "../TextTable"
 import { SyntaxStyle } from "../../syntax-style"
 import { RGBA } from "../../lib/RGBA"
-import { createTestRenderer, type TestRenderer } from "../../testing"
+import { createTestRenderer, type MockMouse, type TestRenderer } from "../../testing"
 import { TextAttributes, type CapturedFrame } from "../../types"
 
 let renderer: TestRenderer
+let mockMouse: MockMouse
 let renderOnce: () => Promise<void>
 let captureFrame: () => string
 let captureSpans: () => CapturedFrame
@@ -18,6 +20,7 @@ const syntaxStyle = SyntaxStyle.fromStyles({
 beforeEach(async () => {
   const testRenderer = await createTestRenderer({ width: 60, height: 40 })
   renderer = testRenderer.renderer
+  mockMouse = testRenderer.mockMouse
   renderOnce = testRenderer.renderOnce
   captureFrame = testRenderer.captureCharFrame
   captureSpans = testRenderer.captureSpans
@@ -35,6 +38,7 @@ async function renderMarkdown(markdown: string, conceal: boolean = true): Promis
     content: markdown,
     syntaxStyle,
     conceal,
+    tableOptions: { widthMode: "content" },
   })
 
   renderer.root.add(md)
@@ -54,14 +58,71 @@ test("basic table alignment", async () => {
 
   expect(await renderMarkdown(markdown)).toMatchInlineSnapshot(`
     "
-    ┌───────┬─────┐
-    │Name   │Age  │
-    │───────│─────│
-    │Alice  │30   │
-    │───────│─────│
-    │Bob    │5    │
-    └───────┴─────┘"
+    ┌─────┬───┐
+    │Name │Age│
+    ├─────┼───┤
+    │Alice│30 │
+    ├─────┼───┤
+    │Bob  │5  │
+    └─────┴───┘"
   `)
+})
+
+test("tableOptions.widthMode configures markdown table layout", async () => {
+  const md = new MarkdownRenderable(renderer, {
+    id: "markdown-table-width-mode",
+    content: "| Name | Age |\n|---|---|\n| Alice | 30 |",
+    syntaxStyle,
+    tableOptions: {
+      widthMode: "full",
+      columnFitter: "balanced",
+    },
+  })
+
+  renderer.root.add(md)
+  await renderOnce()
+
+  const table = md._blockStates[0]?.renderable as TextTableRenderable
+  expect(table).toBeInstanceOf(TextTableRenderable)
+  expect(table.columnWidthMode).toBe("full")
+  expect(table.columnFitter).toBe("balanced")
+})
+
+test("tableOptions updates existing markdown table renderable", async () => {
+  const md = new MarkdownRenderable(renderer, {
+    id: "markdown-table-updates",
+    content: "| Name | Age |\n|---|---|\n| Alice | 30 |",
+    syntaxStyle,
+  })
+
+  renderer.root.add(md)
+  await renderOnce()
+
+  const table = md._blockStates[0]?.renderable as TextTableRenderable
+  expect(table).toBeInstanceOf(TextTableRenderable)
+  expect(table.columnWidthMode).toBe("full")
+
+  md.tableOptions = {
+    widthMode: "full",
+    columnFitter: "balanced",
+    wrapMode: "word",
+    cellPadding: 1,
+    borders: false,
+    selectable: false,
+  }
+
+  await renderOnce()
+
+  const updatedTable = md._blockStates[0]?.renderable as TextTableRenderable
+  expect(updatedTable).toBe(table)
+  expect(updatedTable.columnWidthMode).toBe("full")
+  expect(updatedTable.columnFitter).toBe("balanced")
+  expect(updatedTable.wrapMode).toBe("word")
+  expect(updatedTable.cellPadding).toBe(1)
+  expect(updatedTable.border).toBe(false)
+  expect(updatedTable.outerBorder).toBe(false)
+  expect(updatedTable.showBorders).toBe(false)
+  expect(updatedTable.selectable).toBe(false)
 })
 
 test("table with inline code (backticks)", async () => {
@@ -73,15 +134,15 @@ test("table with inline code (backticks)", async () => {
 
   expect(await renderMarkdown(markdown)).toMatchInlineSnapshot(`
     "
-    ┌───────────────┬───────────────┐
-    │Command        │Description    │
-    │───────────────│───────────────│
-    │npm install    │Install deps   │
-    │───────────────│───────────────│
-    │npm run build  │Build project  │
-    │───────────────│───────────────│
-    │npm test       │Run tests      │
-    └───────────────┴───────────────┘"
+    ┌─────────────┬─────────────┐
+    │Command      │Description  │
+    ├─────────────┼─────────────┤
+    │npm install  │Install deps │
+    ├─────────────┼─────────────┤
+    │npm run build│Build project│
+    ├─────────────┼─────────────┤
+    │npm test     │Run tests    │
+    └─────────────┴─────────────┘"
   `)
 })
 
@@ -93,13 +154,13 @@ test("table with bold text", async () => {
 
   expect(await renderMarkdown(markdown)).toMatchInlineSnapshot(`
     "
-    ┌────────────────┬────────┐
-    │Feature         │Status  │
-    │────────────────│────────│
-    │Authentication  │Done    │
-    │────────────────│────────│
-    │API             │WIP     │
-    └────────────────┴────────┘"
+    ┌──────────────┬──────┐
+    │Feature       │Status│
+    ├──────────────┼──────┤
+    │Authentication│Done  │
+    ├──────────────┼──────┤
+    │API           │WIP   │
+    └──────────────┴──────┘"
   `)
 })
 
@@ -111,13 +172,13 @@ test("table with italic text", async () => {
 
   expect(await renderMarkdown(markdown)).toMatchInlineSnapshot(`
     "
-    ┌──────┬───────────┐
-    │Item  │Note       │
-    │──────│───────────│
-    │One   │important  │
-    │──────│───────────│
-    │Two   │ok         │
-    └──────┴───────────┘"
+    ┌────┬─────────┐
+    │Item│Note     │
+    ├────┼─────────┤
+    │One │important│
+    ├────┼─────────┤
+    │Two │ok       │
+    └────┴─────────┘"
   `)
 })
 
@@ -129,13 +190,13 @@ test("table with mixed formatting", async () => {
 
   expect(await renderMarkdown(markdown)).toMatchInlineSnapshot(`
     "
-    ┌───────┬────────┬────────┐
-    │Type   │Value   │Notes   │
-    │───────│────────│────────│
-    │Bold   │code    │italic  │
-    │───────│────────│────────│
-    │Plain  │strong  │cmd     │
-    └───────┴────────┴────────┘"
+    ┌─────┬──────┬──────┐
+    │Type │Value │Notes │
+    ├─────┼──────┼──────┤
+    │Bold │code  │italic│
+    ├─────┼──────┼──────┤
+    │Plain│strong│cmd   │
+    └─────┴──────┴──────┘"
   `)
 })
 
@@ -147,13 +208,13 @@ test("table with alignment markers (left, center, right)", async () => {
 
   expect(await renderMarkdown(markdown)).toMatchInlineSnapshot(`
     "
-    ┌───────────┬────────┬───────┐
-    │Left       │Center  │Right  │
-    │───────────│────────│───────│
-    │A          │B       │C      │
-    │───────────│────────│───────│
-    │Long text  │X       │Y      │
-    └───────────┴────────┴───────┘"
+    ┌─────────┬──────┬─────┐
+    │Left     │Center│Right│
+    ├─────────┼──────┼─────┤
+    │A        │B     │C    │
+    ├─────────┼──────┼─────┤
+    │Long text│X     │Y    │
+    └─────────┴──────┴─────┘"
   `)
 })
 
@@ -165,13 +226,13 @@ test("table with empty cells", async () => {
 
   expect(await renderMarkdown(markdown)).toMatchInlineSnapshot(`
     "
-    ┌───┬───┐
-    │A  │B  │
-    │───│───│
-    │X  │   │
-    │───│───│
-    │   │Y  │
-    └───┴───┘"
+    ┌─┬─┐
+    │A│B│
+    ├─┼─┤
+    │X│ │
+    ├─┼─┤
+    │ │Y│
+    └─┴─┘"
   `)
 })
 
@@ -182,11 +243,11 @@ test("table with long header and short content", async () => {
 
   expect(await renderMarkdown(markdown)).toMatchInlineSnapshot(`
     "
-    ┌─────────────────────────┬───────┐
-    │Very Long Column Header  │Short  │
-    │─────────────────────────│───────│
-    │A                        │B      │
-    └─────────────────────────┴───────┘"
+    ┌───────────────────────┬─────┐
+    │Very Long Column Header│Short│
+    ├───────────────────────┼─────┤
+    │A                      │B    │
+    └───────────────────────┴─────┘"
   `)
 })
 
@@ -197,11 +258,11 @@ test("table with short header and long content", async () => {
 
   expect(await renderMarkdown(markdown)).toMatchInlineSnapshot(`
     "
-    ┌───────────────────────────┬───────┐
-    │X                          │Y      │
-    │───────────────────────────│───────│
-    │This is very long content  │Short  │
-    └───────────────────────────┴───────┘"
+    ┌─────────────────────────┬─────┐
+    │X                        │Y    │
+    ├─────────────────────────┼─────┤
+    │This is very long content│Short│
+    └─────────────────────────┴─────┘"
   `)
 })
 
@@ -222,11 +283,11 @@ test("table inside code block should NOT be formatted", async () => {
     |---|---|---|
     | Should | Stay | Raw |
 
-    ┌──────┬───────────┐
-    │Real  │Table      │
-    │──────│───────────│
-    │Is    │Formatted  │
-    └──────┴───────────┘"
+    ┌────┬─────────┐
+    │Real│Table    │
+    ├────┼─────────┤
+    │Is  │Formatted│
+    └────┴─────────┘"
   `)
 })
 
@@ -243,19 +304,19 @@ Some text between.
 
   expect(await renderMarkdown(markdown)).toMatchInlineSnapshot(`
     "
-    ┌────────┬───┐
-    │Table1  │A  │
-    │────────│───│
-    │X       │Y  │
-    └────────┴───┘
+    ┌──────┬─┐
+    │Table1│A│
+    ├──────┼─┤
+    │X     │Y│
+    └──────┴─┘
 
     Some text between.
 
-    ┌──────────────┬────┐
-    │Table2        │BB  │
-    │──────────────│────│
-    │Long content  │Z   │
-    └──────────────┴────┘"
+    ┌────────────┬──┐
+    │Table2      │BB│
+    ├────────────┼──┤
+    │Long content│Z │
+    └────────────┴──┘"
   `)
 })
 
@@ -267,13 +328,13 @@ test("table with escaped pipe character", async () => {
 
   expect(await renderMarkdown(markdown)).toMatchInlineSnapshot(`
     "
-    ┌───────────┬──────────┐
-    │Command    │Output    │
-    │───────────│──────────│
-    │echo       │Hello     │
-    │───────────│──────────│
-    │ls | grep  │Filtered  │
-    └───────────┴──────────┘"
+    ┌─────────┬────────┐
+    │Command  │Output  │
+    ├─────────┼────────┤
+    │echo     │Hello   │
+    ├─────────┼────────┤
+    │ls | grep│Filtered│
+    └─────────┴────────┘"
   `)
 })
 
@@ -286,15 +347,15 @@ test("table with unicode characters", async () => {
 
   expect(await renderMarkdown(markdown)).toMatchInlineSnapshot(`
     "
-    ┌────────┬──────────┐
-    │Emoji   │Name      │
-    │────────│──────────│
-    │🎉      │Party     │
-    │────────│──────────│
-    │🚀      │Rocket    │
-    │────────│──────────│
-    │日本語  │Japanese  │
-    └────────┴──────────┘"
+    ┌──────┬────────┐
+    │Emoji │Name    │
+    ├──────┼────────┤
+    │🎉    │Party   │
+    ├──────┼────────┤
+    │🚀    │Rocket  │
+    ├──────┼────────┤
+    │日本語│Japanese│
+    └──────┴────────┘"
   `)
 })
 
@@ -306,13 +367,13 @@ test("table with links", async () => {
 
   expect(await renderMarkdown(markdown)).toMatchInlineSnapshot(`
     "
-    ┌────────┬───────────────────────────┐
-    │Name    │Link                       │
-    │────────│───────────────────────────│
-    │Google  │link (https://google.com)  │
-    │────────│───────────────────────────│
-    │GitHub  │gh (https://github.com)    │
-    └────────┴───────────────────────────┘"
+    ┌──────┬─────────────────────────┐
+    │Name  │Link                     │
+    ├──────┼─────────────────────────┤
+    │Google│link (https://google.com)│
+    ├──────┼─────────────────────────┤
+    │GitHub│gh (https://github.com)  │
+    └──────┴─────────────────────────┘"
   `)
 })
 
@@ -334,11 +395,11 @@ test("table with many columns", async () => {
 
   expect(await renderMarkdown(markdown)).toMatchInlineSnapshot(`
     "
-    ┌───┬───┬───┬───┬───┐
-    │A  │B  │C  │D  │E  │
-    │───│───│───│───│───│
-    │1  │2  │3  │4  │5  │
-    └───┴───┴───┴───┴───┘"
+    ┌─┬─┬─┬─┬─┐
+    │A│B│C│D│E│
+    ├─┼─┼─┼─┼─┤
+    │1│2│3│4│5│
+    └─┴─┴─┴─┴─┘"
   `)
 })
 
@@ -367,13 +428,13 @@ test("table with nested inline formatting", async () => {
 
   expect(await renderMarkdown(markdown)).toMatchInlineSnapshot(`
     "
-    ┌─────────────────────────────────┐
-    │Description                      │
-    │─────────────────────────────────│
-    │This has bold and code together  │
-    │─────────────────────────────────│
-    │And italic with nested bold      │
-    └─────────────────────────────────┘"
+    ┌───────────────────────────────┐
+    │Description                    │
+    ├───────────────────────────────┤
+    │This has bold and code together│
+    ├───────────────────────────────┤
+    │And italic with nested bold    │
+    └───────────────────────────────┘"
   `)
 })
 
@@ -387,13 +448,13 @@ test("conceal=false: table with bold text", async () => {
 
   expect(await renderMarkdown(markdown, false)).toMatchInlineSnapshot(`
     "
-    ┌────────────────────┬────────┐
-    │Feature             │Status  │
-    │────────────────────│────────│
-    │**Authentication**  │Done    │
-    │────────────────────│────────│
-    │**API**             │WIP     │
-    └────────────────────┴────────┘"
+    ┌──────────────────┬──────┐
+    │Feature           │Status│
+    ├──────────────────┼──────┤
+    │**Authentication**│Done  │
+    ├──────────────────┼──────┤
+    │**API**           │WIP   │
+    └──────────────────┴──────┘"
   `)
 })
 
@@ -405,13 +466,13 @@ test("conceal=false: table with inline code", async () => {
 
   expect(await renderMarkdown(markdown, false)).toMatchInlineSnapshot(`
     "
-    ┌─────────────────┬───────────────┐
-    │Command          │Description    │
-    │─────────────────│───────────────│
-    │\`npm install\`    │Install deps   │
-    │─────────────────│───────────────│
-    │\`npm run build\`  │Build project  │
-    └─────────────────┴───────────────┘"
+    ┌───────────────┬─────────────┐
+    │Command        │Description  │
+    ├───────────────┼─────────────┤
+    │\`npm install\`  │Install deps │
+    ├───────────────┼─────────────┤
+    │\`npm run build\`│Build project│
+    └───────────────┴─────────────┘"
   `)
 })
 
@@ -423,13 +484,13 @@ test("conceal=false: table with italic text", async () => {
 
   expect(await renderMarkdown(markdown, false)).toMatchInlineSnapshot(`
     "
-    ┌──────┬─────────────┐
-    │Item  │Note         │
-    │──────│─────────────│
-    │One   │*important*  │
-    │──────│─────────────│
-    │Two   │*ok*         │
-    └──────┴─────────────┘"
+    ┌────┬───────────┐
+    │Item│Note       │
+    ├────┼───────────┤
+    │One │*important*│
+    ├────┼───────────┤
+    │Two │*ok*       │
+    └────┴───────────┘"
   `)
 })
 
@@ -441,13 +502,13 @@ test("conceal=false: table with mixed formatting", async () => {
 
   expect(await renderMarkdown(markdown, false)).toMatchInlineSnapshot(`
     "
-    ┌──────────┬────────────┬──────────┐
-    │Type      │Value       │Notes     │
-    │──────────│────────────│──────────│
-    │**Bold**  │\`code\`      │*italic*  │
-    │──────────│────────────│──────────│
-    │Plain     │**strong**  │\`cmd\`     │
-    └──────────┴────────────┴──────────┘"
+    ┌────────┬──────────┬────────┐
+    │Type    │Value     │Notes   │
+    ├────────┼──────────┼────────┤
+    │**Bold**│\`code\`    │*italic*│
+    ├────────┼──────────┼────────┤
+    │Plain   │**strong**│\`cmd\`   │
+    └────────┴──────────┴────────┘"
   `)
 })
 
@@ -460,15 +521,15 @@ test("conceal=false: table with unicode characters", async () => {
 
   expect(await renderMarkdown(markdown, false)).toMatchInlineSnapshot(`
     "
-    ┌────────┬──────────┐
-    │Emoji   │Name      │
-    │────────│──────────│
-    │🎉      │Party     │
-    │────────│──────────│
-    │🚀      │Rocket    │
-    │────────│──────────│
-    │日本語  │Japanese  │
-    └────────┴──────────┘"
+    ┌──────┬────────┐
+    │Emoji │Name    │
+    ├──────┼────────┤
+    │🎉    │Party   │
+    ├──────┼────────┤
+    │🚀    │Rocket  │
+    ├──────┼────────┤
+    │日本語│Japanese│
+    └──────┴────────┘"
   `)
 })
 
@@ -480,13 +541,13 @@ test("conceal=false: basic table alignment", async () => {
 
   expect(await renderMarkdown(markdown, false)).toMatchInlineSnapshot(`
     "
-    ┌───────┬─────┐
-    │Name   │Age  │
-    │───────│─────│
-    │Alice  │30   │
-    │───────│─────│
-    │Bob    │5    │
-    └───────┴─────┘"
+    ┌─────┬───┐
+    │Name │Age│
+    ├─────┼───┤
+    │Alice│30 │
+    ├─────┼───┤
+    │Bob  │5  │
+    └─────┴───┘"
   `)
 })
 
@@ -503,14 +564,57 @@ This is a paragraph after the table.`
     "
     This is a paragraph before the table.
 
-    ┌───────┬─────┐
-    │Name   │Age  │
-    │───────│─────│
-    │Alice  │30   │
-    └───────┴─────┘
+    ┌─────┬───┐
+    │Name │Age│
+    ├─────┼───┤
+    │Alice│30 │
+    └─────┴───┘
 
     This is a paragraph after the table."
   `)
+})
+
+test("selection across markdown table includes table data", async () => {
+  const markdown = `Intro line above table.
+
+| Component | Status | Notes |
+|---|---|---|
+| Authentication | **Done** | OAuth2 + SSO |
+| Payments API | *In Progress* | Retry + idempotency |
+| Search Indexer | \`Done\` | Ranking + typo fix |
+
+Outro line below table.`
+
+  const md = new MarkdownRenderable(renderer, {
+    id: "markdown",
+    content: markdown,
+    syntaxStyle,
+  })
+
+  renderer.root.add(md)
+  await renderOnce()
+
+  const topBlock = md._blockStates[0]?.renderable as TextRenderable | undefined
+  const tableBlock = md._blockStates[1]?.renderable as TextTableRenderable | undefined
+  const bottomBlock = md._blockStates[2]?.renderable as TextRenderable | undefined
+
+  expect(topBlock).toBeInstanceOf(TextRenderable)
+  expect(tableBlock).toBeInstanceOf(TextTableRenderable)
+  expect(bottomBlock).toBeInstanceOf(TextRenderable)
+
+  const startX = topBlock!.x + 1
+  const startY = topBlock!.y
+  const endX = Math.max(bottomBlock!.x + bottomBlock!.width - 2, startX + 1)
+  const endY = bottomBlock!.y
+
+  await mockMouse.drag(startX, startY, endX, endY)
+  await renderOnce()
+
+  const selectedText = renderer.getSelection()?.getSelectedText() ?? ""
+
+  expect(selectedText).toContain("Authentication")
+  expect(selectedText).toContain("Payments API")
+  expect(selectedText).toContain("Retry + idempotency")
 })
 
 // Code block tests
@@ -1031,11 +1135,11 @@ test("malformed table with missing pipes", async () => {
 
   expect(await renderMarkdown(markdown)).toMatchInlineSnapshot(`
     "
-    ┌───┬───┐
-    │A  │B  │
-    │───│───│
-    │1  │2  │
-    └───┴───┘"
+    ┌─┬─┐
+    │A│B│
+    ├─┼─┤
+    │1│2│
+    └─┴─┘"
   `)
 })
 
@@ -1116,11 +1220,11 @@ test("table at end with trailing blank lines", async () => {
 
   expect(await renderMarkdown(markdown)).toMatchInlineSnapshot(`
     "
-    ┌───┬───┐
-    │A  │B  │
-    │───│───│
-    │1  │2  │
-    └───┴───┘"
+    ┌─┬─┐
+    │A│B│
+    ├─┼─┤
+    │1│2│
+    └─┴─┘"
   `)
 })
 
@@ -1419,6 +1523,58 @@ test("table updates content when not streaming", async () => {
   const frame2 = captureFrame()
   expect(frame2).toContain("2")
   expect(frame2).not.toContain("1")
+})
+
+test("table keeps unchanged cell chunks stable across updates", async () => {
+  const md = new MarkdownRenderable(renderer, {
+    id: "markdown",
+    content: "| A | B |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |",
+    syntaxStyle,
+    streaming: false,
+  })
+
+  renderer.root.add(md)
+  await renderOnce()
+
+  const table = md._blockStates[0]?.renderable as TextTableRenderable
+  expect(table).toBeInstanceOf(TextTableRenderable)
+
+  const headerBefore = table.content[0]?.[0]
+  const firstRowBefore = table.content[1]?.[0]
+  const secondRowSecondCellBefore = table.content[2]?.[1]
+  const changedCellBefore = table.content[2]?.[0]
+
+  md.content = "| A | B |\n|---|---|\n| 1 | 2 |\n| 33 | 4 |"
+  await renderOnce()
+
+  const tableAfter = md._blockStates[0]?.renderable as TextTableRenderable
+  expect(tableAfter).toBe(table)
+  expect(tableAfter.content[0]?.[0]).toBe(headerBefore)
+  expect(tableAfter.content[1]?.[0]).toBe(firstRowBefore)
+  expect(tableAfter.content[2]?.[1]).toBe(secondRowSecondCellBefore)
+  expect(tableAfter.content[2]?.[0]).not.toBe(changedCellBefore)
+})
+
+test("streaming table ignores unstable trailing row updates", async () => {
+  const md = new MarkdownRenderable(renderer, {
+    id: "markdown",
+    content: "| A |\n|---|\n| 1 |\n| 2 |",
+    syntaxStyle,
+    streaming: true,
+  })
+
+  renderer.root.add(md)
+  await renderOnce()
+
+  const table = md._blockStates[0]?.renderable as TextTableRenderable
+  const contentBefore = table.content
+
+  md.content = "| A |\n|---|\n| 1 |\n| 200 |"
+  await renderOnce()
+
+  const tableAfter = md._blockStates[0]?.renderable as TextTableRenderable
+  expect(tableAfter).toBe(table)
+  expect(tableAfter.content).toBe(contentBefore)
 })
 
 test("streaming table with incomplete first row falls back to raw text and updates", async () => {
